@@ -1190,10 +1190,11 @@ public abstract class CtBehavior extends CtMember {
      * clause only protects code after {@code super()} or {@code this()}
      * returns, as with the other addCatch overloads.
      *
-     * <p>If compilation or stack-map rebuilding fails, the original method
-     * code is retained.  Passing null as the initializer retains the behavior
-     * of {@link #addCatch(String, CtClass, String)}, including its local
-     * variable visibility rules.
+     * <p>Like the other addCatch overloads, this method modifies the method
+     * body in place.  If compilation or stack-map rebuilding fails, changes
+     * already made are not rolled back.  Passing null as the initializer
+     * retains the behavior of {@link #addCatch(String, CtClass, String)},
+     * including its local variable visibility rules.
      *
      * @param src           the catch clause, ending with return or throw.
      * @param exceptionType the type of exception to catch.
@@ -1208,14 +1209,10 @@ public abstract class CtBehavior extends CtMember {
         CtClass cc = declaringClass;
         cc.checkModify();
         ConstPool cp = methodInfo.getConstPool();
-        CodeAttribute original = methodInfo.getCodeAttribute();
-        if (original == null)
+        CodeAttribute ca = methodInfo.getCodeAttribute();
+        if (ca == null)
             throw new CannotCompileException("no method body");
 
-        // Work on a copy for the opt-in API so failed edits are not published.
-        CodeAttribute ca = initializer == null ? original
-                : (CodeAttribute)original.copy(cp, null);
-        boolean complete = false;
         try {
             int initializedEnd = 0;
             if (initializer != null) {
@@ -1265,9 +1262,7 @@ public abstract class CtBehavior extends CtMember {
             ca.getExceptionTable().add(start, len, pos,
                                        cp.addClassInfo(exceptionType));
             iterator.append(b.getExceptionTable(), pos);
-            methodInfo.setCodeAttribute(ca);
             methodInfo.rebuildStackMapIf6(cc.getClassPool(), cc.getClassFile2());
-            complete = true;
         }
         catch (NotFoundException e) {
             throw new CannotCompileException(e);
@@ -1276,9 +1271,6 @@ public abstract class CtBehavior extends CtMember {
             throw new CannotCompileException(e);
         } catch (BadBytecode e) {
             throw new CannotCompileException(e);
-        } finally {
-            if (initializer != null && !complete)
-                methodInfo.setCodeAttribute(original);
         }
     }
 

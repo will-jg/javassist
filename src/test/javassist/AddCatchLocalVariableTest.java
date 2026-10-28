@@ -221,32 +221,31 @@ public class AddCatchLocalVariableTest extends TestCase {
         assertNull(Hooks.EXITED.get(1));
     }
 
-    public void testFailedHandlerCompilationRetainsOriginalCode() throws Exception {
+    public void testFailedHandlerCompilationIsReportedAfterInPlaceInsertion() throws Exception {
         CtMethod method = method("public static int run() { return 7; }");
-        CodeAttribute original = method.getMethodInfo().getCodeAttribute();
         method.addLocalVariable("context", pool.get("java.lang.Object"));
+        int originalLength = method.getMethodInfo().getCodeAttribute().getCodeLength();
         try {
-            method.addCatch("{ missingSymbol(); throw $e; }", pool.get("java.lang.Throwable"), "$e", "context = null;");
+            method.addCatch("{ missingSymbol(); throw $e; }",
+                    pool.get("java.lang.Throwable"), "$e", "context = null;");
             fail("invalid handler must not compile");
         } catch (CannotCompileException expected) {
-            assertSame(original, method.getMethodInfo().getCodeAttribute());
+            assertNotNull(expected.getCause());
+            assertTrue(method.getMethodInfo().getCodeAttribute().getCodeLength() > originalLength);
         }
-        assertEquals(7, load().getMethod("run").invoke(null));
     }
 
-    public void testFailedInitializerCompilationRetainsOriginalCode() throws Exception {
+    public void testFailedInitializerCompilationIsReported() throws Exception {
         CtMethod method = method("public static int run() { return 11; }");
-        CodeAttribute original = method.getMethodInfo().getCodeAttribute();
         try {
             method.addCatch("{ throw $e; }", pool.get("java.lang.Throwable"), "$e", "missingSymbol();");
             fail("invalid initializer must not compile");
         } catch (CannotCompileException expected) {
-            assertSame(original, method.getMethodInfo().getCodeAttribute());
+            assertNotNull(expected.getCause());
         }
-        assertEquals(11, load().getMethod("run").invoke(null));
     }
 
-    public void testFailedStackMapRebuildRetainsOriginalCode() throws Exception {
+    public void testFailedStackMapRebuildIsReported() throws Exception {
         CtClass parent = pool.makeClass("testcatch.MissingBase");
         CtClass left = pool.makeClass("testcatch.Left", parent);
         CtClass right = pool.makeClass("testcatch.Right", parent);
@@ -254,13 +253,11 @@ public class AddCatchLocalVariableTest extends TestCase {
         right.addConstructor(CtNewConstructor.defaultConstructor(right));
         CtMethod method = method("public static Object run(boolean flag) { Object value; if(flag) value = new testcatch.Left(); else value = new testcatch.Right(); return value; }");
         method.addLocalVariable("context", pool.get("java.lang.Object"));
-        CodeAttribute original = method.getMethodInfo().getCodeAttribute();
         parent.detach();
         try {
             method.addCatch("{ throw $e; }", pool.get("java.lang.Throwable"), "$e", "context = null;");
             fail("missing merge type must fail stack-map rebuilding");
         } catch (CannotCompileException expected) {
-            assertSame(original, method.getMethodInfo().getCodeAttribute());
             assertNotNull(expected.getCause());
         }
     }
@@ -286,6 +283,52 @@ public class AddCatchLocalVariableTest extends TestCase {
             assertTrue(expected.getCause() instanceof IllegalStateException);
         }
         assertEquals(Hooks.ENTERED, Hooks.EXITED);
+    }
+
+    public void testIsolatedLambdaAndMethodReferenceKeepResultsAndExceptions() throws Exception {
+        isolatedLambdaTarget();
+        weave(target.getDeclaredMethod("lambda"), "lambda");
+        weave(target.getDeclaredMethod("reference"), "reference");
+        Class<?> type = load();
+        assertEquals(8, type.getMethod("lambda", int.class).invoke(null, 7));
+        assertEquals(9, type.getMethod("reference", int.class).invoke(null, 8));
+        assertTrue(invokeFailure(type, "lambda", new Class<?>[] {int.class}, new Object[] {-1})
+                instanceof IllegalArgumentException);
+        assertTrue(invokeFailure(type, "reference", new Class<?>[] {int.class}, new Object[] {-1})
+                instanceof IllegalArgumentException);
+        assertEquals(4, Hooks.ENTERED.size());
+        assertEquals(Hooks.ENTERED, Hooks.EXITED);
+    }
+
+    private void isolatedLambdaTarget() throws Exception {
+        target.detach();
+        String resource = "/" + LambdaFixture.class.getName().replace('.', '/') + ".class";
+        try (java.io.InputStream input = getClass().getResourceAsStream(resource)) {
+            target = pool.makeClass(input);
+        }
+        // The renamed class exists only in this pool, as with an isolated application class.
+        target.setName("testcatch.IsolatedLambdaTarget");
+        try {
+            ClassPool.getDefault().get(target.getName());
+            fail("fixture must be absent from the default pool");
+        } catch (NotFoundException expected) {
+            assertSame(target, pool.get(target.getName()));
+        }
+    }
+
+    public static class LambdaFixture {
+        public static int lambda(int value) {
+            java.util.function.IntUnaryOperator operation = n -> increment(n);
+            return operation.applyAsInt(value);
+        }
+        public static int reference(int value) {
+            java.util.function.IntUnaryOperator operation = LambdaFixture::increment;
+            return operation.applyAsInt(value);
+        }
+        private static int increment(int value) {
+            if (value < 0) throw new IllegalArgumentException("negative value");
+            return value + 1;
+        }
     }
 
     private CtMethod method(String source) throws Exception {

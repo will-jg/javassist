@@ -575,6 +575,8 @@ In constructors, the initializer runs before <code>this()</code> or
 <code>super()</code> and cannot access the uninitialized receiver; the catch
 clause still starts after constructor delegation returns.
 The existing overloads, and a null initializer, retain their original behavior.
+Like the existing overloads, the new overload modifies the method body in place;
+changes already made are not rolled back if compilation or stack-map rebuilding fails.
 
 <p><br>
 
